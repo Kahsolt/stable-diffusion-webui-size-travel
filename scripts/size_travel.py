@@ -17,7 +17,7 @@ DEFAULT_MODE          = 'simple'
 DEFAULT_STEP          = 64
 DEFAULT_SIZE          = 512
 DEFAULT_VIDEO_SAVE    = True
-DEFAULT_VIDEO_FPS     = 10
+DEFAULT_VIDEO_FPS     = 3
 DEFAULT_VIDEO_CONCAT  = 'compose'
 DEFAULT_DEBUG         = True
 
@@ -146,18 +146,31 @@ class Script(scripts.Script):
         return True
 
     def ui(self, is_img2img):
-        mode        = gr.Radio(choices=['simple', 'advance'],                   value=lambda: DEFAULT_MODE)
-        height_opt  = gr.Textbox(label='Height Variation (Simple Mode)',        lines=1, placeholder=HINT_H_OPTS)
-        width_opt   = gr.Textbox(label='Width Variation (Simple Mode)',         lines=1, placeholder=HINT_W_OPTS)
-        advance_opt = gr.Textbox(label='Height/Width Variation (Advance Mode)', lines=3, placeholder=HINT_HW_OPTS)
+        with gr.Row():
+            mode = gr.Radio(choices=['simple', 'advance'], value=lambda: DEFAULT_MODE)
 
-        video_save   = gr.Checkbox(label='Save results as video', value=lambda: DEFAULT_VIDEO_SAVE)
-        video_fps    = gr.Number(label='Frames per second',       value=lambda: DEFAULT_VIDEO_FPS)
-        video_concat = gr.Radio(choices=['compose', 'chain'],     value=lambda: DEFAULT_VIDEO_CONCAT)
+        with gr.Row(visible=DEFAULT_MODE=='simple') as tab_simple:
+            height_opt = gr.Textbox(label='Height Variation', lines=1, placeholder=HINT_H_OPTS)
+            width_opt  = gr.Textbox(label='Width Variation', lines=1, placeholder=HINT_W_OPTS)
+        
+        with gr.Row(visible=DEFAULT_MODE=='advance') as tab_advance:
+            advance_opt = gr.Textbox(label='Height/Width Variation', lines=3, placeholder=HINT_HW_OPTS)
+
+        with gr.Row():
+            video_fps    = gr.Number(label='Video FPS', value=lambda: DEFAULT_VIDEO_FPS)
+            video_concat = gr.Radio(label='Video concat method', choices=['compose', 'chain'], value=lambda: DEFAULT_VIDEO_CONCAT)
 
         show_debug  = gr.Checkbox(label='Show verbose debug info at console', value=lambda: DEFAULT_DEBUG)
 
-        return [mode, height_opt, width_opt, advance_opt, video_save, video_fps, video_concat, show_debug]
+        def switch_mode(mode):
+            return [
+                { 'visible': mode == 'simple',  '__type__': 'update' },
+                { 'visible': mode == 'advance', '__type__': 'update' },
+            ]
+
+        mode.change(fn=switch_mode, inputs=[mode], outputs=[tab_simple, tab_advance])
+
+        return [mode, height_opt, width_opt, advance_opt, video_fps, video_concat, show_debug]
 
     def get_next_sequence_number(path):
         from pathlib import Path
@@ -176,30 +189,26 @@ class Script(scripts.Script):
                 pass
         return result + 1
 
-    def run(self, p:StableDiffusionProcessing, mode, height_opt, width_opt, advance_opt, video_save, video_fps, video_concat, show_debug):
+    def run(self, p:StableDiffusionProcessing, mode, height_opt, width_opt, advance_opt, video_fps, video_concat, show_debug):
         initial_info = None
         images = []
 
         if mode == 'simple':
             if not height_opt or not width_opt:
-                print('run in simple mode but got empty "height_opt" or "width_opt"')
-                return Processed(p, images, p.seed)
+                return Processed(p, images, p.seed, 'run in simple mode but got empty "height_opt" or "width_opt"')
             
             hs = parse_simple_opts(height_opt)
             ws = parse_simple_opts(width_opt)
             hws = zip_hw(hs, ws)
         elif mode == 'advance':
             if not advance_opt:
-                print('run in advance mode, but get empty "advance_opt"')
-                return Processed(p, images, p.seed)
+                return Processed(p, images, p.seed, 'run in advance mode, but get empty "advance_opt"')
 
             hws = parse_advance_opts(advance_opt)
         else:
-            print(f'unknown size_travel mode {mode}')
-            return Processed(p, images, p.seed)
+            return Processed(p, images, p.seed, f'unknown size_travel mode {mode}')
 
-        if show_debug:
-            print('[size_travel] hws:', hws)
+        if show_debug: print('[size_travel] hws:', hws)
 
         # Custom seed travel saving
         travel_path = os.path.join(p.outpath_samples, 'size_travel')
@@ -213,11 +222,11 @@ class Script(scripts.Script):
         p.batch_size = 1
 
         # Random unified const seed
-        seed = get_fixed_seed(p.seed)
-        p.seed             = seed
-        p.subseed          = None
-        p.subseed_strength = 0.0
-        if show_debug: print('seed:', p.seed)
+        p.seed = get_fixed_seed(p.seed)
+        self.subseed = p.subseed
+        if show_debug:
+            print('seed:', p.seed)
+            print('subseed:', p.subseed)
 
         # Start job
         n_jobs = len(hws)
@@ -225,9 +234,11 @@ class Script(scripts.Script):
         print(f"Generating {n_jobs} images.")
         for h, w in hws:
             if state.interrupted: break
+            torch_gc()
 
             p.height = h
             p.width  = w
+            p.subseed = self.subseed
 
             try:
                 proc = process_images(p)
@@ -237,15 +248,15 @@ class Script(scripts.Script):
                 print(f'>> error gen size ({h}, {w})')
                 if show_debug: print_exc()
 
-        if video_save:
+        if video_fps > 0 and len(images) > 1:
             try:
                 imgs = [np.asarray(t) for t in images]
                 frames = [ImageClip(img, duration=1/video_fps) for img in imgs]
-                clip = concatenate_videoclips(frames, method=video_concat)            # images may have different size
+                clip = concatenate_videoclips(frames, method=video_concat)  # images may have different size
                 clip.fps = video_fps
-                clip.write_videofile(os.path.join(travel_path, f"travel-{travel_number:05}.mp4"), verbose=False, audio=False, logger=None)
-            except:
-                print_exc()
+                clip.write_videofile(os.path.join(travel_path, f"travel-{travel_number:05}.mp4"), verbose=False, audio=False)
+            except NameError: pass
+            except: print_exc()
 
         return Processed(p, images, p.seed, initial_info)
 

@@ -1,6 +1,6 @@
 # stable-diffusion-webui-size-travel
 
-    Experimental script for AUTOMATIC1111/stable-diffusion-webui to create images that evolves in size.
+    Experimental script for AUTOMATIC1111/stable-diffusion-webui to create images that changes in size.
 
 ----
 
@@ -11,11 +11,11 @@ Let's just implement this. 🙂
 
 ### How it works?
 
-- generate image one by one (batch count/size are ignored)
+- generate image one by one (`batch count/size` are ignored)
 - varying width and height according to your options
-  - freeze all other settings (steps, sampler, cfg factor, rand seed, etc.)
-  - force `subseed = None`
-- gather to be a video!
+  - freeze all other settings (`steps`, `sampler`, `cfg factor`, `seed`, etc.)
+  - note that only the major `seed` will be forcely fixed through all processes, you can still set `subseed = -1` to allow more variances
+- export a video!
 
 ℹ 笑死，根本travel不起来…… 因为size的变更单位是64，跨度还是过于大了 :(
 
@@ -62,6 +62,9 @@ One line quick setting how height/width varies.
   - omit step:  `512:768`    (same as the first, due to global default `DEFAULT_STEP=64`)
   - const:      `512`        => `[512, ...]`, length is broadcasted to the other dimension 
   - (*) the `step` must be postive, no worry: the ascending/descending order is auto inferred from `start` and `end`:)
+- video
+  - fps: (float), FPS of video, set `0` to disable file saving
+  - concat: (categorical), method to concat different sized pictures
 
 ℹ the computed n_steps for height and width should be the same, if not, it will auto broadcast to the **longer** one by constly padding by the last value
 ⚠ simple mode does **NOT** support syntax of chaining `,` and auto size infer `-1` like in advanced mode
